@@ -1,60 +1,57 @@
 import Phaser from 'phaser';
-import { GAME_CONFIG, COLORS } from '../utils/constants.js';
+  import { COLORS } from '../utils/constants.js'; // Assuming COLORS is still available
 
-export default class  Bullet {
-  constructor(scene, x, y, direction) {
-    this.scene = scene;
-    this.direction = direction;
-    
-    // Create bullet sprite for physics
-    this.sprite = scene.physics.add.sprite(x, y, null);
-    
-    this.sprite.setSize(GAME_CONFIG.BULLET.SIZE.width, GAME_CONFIG.BULLET.SIZE.height);
-    this.sprite.bulletInstance = this; // Reference for collision detection
-    
-    // Create visual bullet
-    this.visual = scene.add.rectangle(x, y, 8, 3, COLORS.BULLET);
-    this.visual.setRotation(direction === 1 ? 0 : Math.PI); // Flip 180° if direction is -1
-this.sprite.setFlipX(direction === -1); // Optional: Flip sprite if using textures
-    // Add glow effect
-    this.glow = scene.add.circle(x, y, 4, COLORS.BULLET, 0.3);
-    
-    console.log(`Bullet pos: (${this.sprite.x.toFixed(1)}, ${this.sprite.y.toFixed(1)})`);  
-    // Set velocity
-this.sprite.setVelocity(GAME_CONFIG.BULLET.SPEED * direction, 0);
-    
-    // Trail effect
-    this.trail = scene.add.graphics();
-    this.trailPoints = [];
-    
-    // Auto-destroy after 3 seconds
-    this.destroyTimer = scene.time.delayedCall(3000, () => {
-      this.destroy();
-    });
-  }
+  export default class Bullet {
+    constructor(scene, x, y, direction, damage = 25) {
+      this.scene = scene;
+      this.direction = direction === 1 || direction === -1 ? direction : 1; // Default to 1 if invalid
+      this.damage = damage;
 
-  update() {
-    // Check if sprite still exists
-    if (!this.sprite || !this.sprite.active) return;
-    
-    // Update visual position
-    if (this.visual) {
-      this.visual.x = this.sprite.x;
-      this.visual.y = this.sprite.y;
+      // Fallback values for GAME_CONFIG.BULLET
+      const defaultConfig = {
+        SPEED: 300,
+        SIZE: { width: 8, height: 3 },
+        DAMAGE: 25
+      };
+      const config = typeof GAME_CONFIG !== 'undefined' ? GAME_CONFIG.BULLET : defaultConfig;
+
+      // Physics sprite
+      this.sprite = scene.physics.add.sprite(x, y, null);
+      this.sprite.setSize(config.SIZE.width, config.SIZE.height);
+      this.sprite.setVelocityX(config.SPEED * this.direction); // Explicitly set X velocity
+      this.sprite.setVelocityY(0); // Ensure no vertical movement
+      this.sprite.body.allowGravity = false; // Disable gravity for bullets
+      this.sprite.bulletInstance = this;
+
+      // Visual: rectangle bullet
+      this.visual = scene.add.rectangle(x, y, 8, 3, COLORS.BULLET);
+      this.visual.setRotation(this.direction === 1 ? 0 : Math.PI);
+
+      // Glow
+      this.glow = scene.add.circle(x, y, 4, COLORS.BULLET, 0.3);
+
+      // Trail
+      this.trail = scene.add.graphics();
+      this.trailPoints = [];
+
+      // Destroy timer
+      this.destroyTimer = scene.time.delayedCall(3000, () => {
+        this.destroy();
+      });
     }
-    
-    if (this.glow) {
-      this.glow.x = this.sprite.x;
-      this.glow.y = this.sprite.y;
-    }
-    
-    // Update trail
-    this.trailPoints.push({ x: this.sprite.x, y: this.sprite.y });
-    if (this.trailPoints.length > 5) {
-      this.trailPoints.shift();
-    }
-    
-    if (this.trail) {
+
+    update() {
+      if (!this.sprite || !this.sprite.active) return;
+
+      // Update visuals
+      const { x, y } = this.sprite;
+      this.visual.setPosition(x, y);
+      this.glow.setPosition(x, y);
+
+      // Trail effect
+      this.trailPoints.push({ x, y });
+      if (this.trailPoints.length > 5) this.trailPoints.shift();
+
       this.trail.clear();
       if (this.trailPoints.length > 1) {
         this.trail.lineStyle(2, COLORS.BULLET, 0.5);
@@ -65,51 +62,31 @@ this.sprite.setVelocity(GAME_CONFIG.BULLET.SPEED * direction, 0);
         }
         this.trail.strokePath();
       }
+
+      // Off-screen cleanup
+      const bounds = this.scene.physics.world.bounds;
+      if (
+        x < bounds.x - 50 || x > bounds.x + bounds.width + 50 ||
+        y < bounds.y - 50 || y > bounds.y + bounds.height + 50
+      ) {
+        this.destroy();
+      }
     }
-    
-    // Destroy if off-screen
-    const bounds = this.scene.physics.world.bounds;
-    if (this.sprite.x < bounds.x - 50 || 
-        this.sprite.x > bounds.x + bounds.width + 50 ||
-        this.sprite.y < bounds.y - 50 || 
-        this.sprite.y > bounds.y + bounds.height + 50) {
+
+    destroy() {
+      if (this.destroyTimer) this.destroyTimer.remove();
+
+      if (this.visual) this.visual.destroy();
+      if (this.glow) this.glow.destroy();
+      if (this.trail) this.trail.destroy();
+      if (this.sprite) this.sprite.destroy();
+
+      this.visual = this.glow = this.trail = this.sprite = null;
+    }
+
+    onHitEnemy(enemy) {
+      const isDead = enemy.takeDamage(this.damage);
       this.destroy();
+      return isDead;
     }
   }
-
-  destroy() {
-    // Clear the timer
-    if (this.destroyTimer) {
-      this.destroyTimer.remove();
-    }
-    
-    // Destroy visual elements
-    if (this.visual) {
-      this.visual.destroy();
-      this.visual = null;
-    }
-    if (this.glow) {
-      this.glow.destroy();
-      this.glow = null;
-    }
-    if (this.trail) {
-      this.trail.destroy();
-      this.trail = null;
-    }
-    if (this.sprite) {
-      this.sprite.destroy();
-      this.sprite = null;
-    }
-  }
-
-  // Method to handle collision with enemies
-  onHitEnemy(enemy) {
-    // Deal damage to enemy
-    const isDead = enemy.takeDamage(GAME_CONFIG.BULLET.DAMAGE || 25);
-    
-    // Destroy the bullet
-    this.destroy();
-    
-    return isDead;
-  }
-}

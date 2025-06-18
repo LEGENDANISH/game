@@ -1,4 +1,6 @@
 import Phaser from 'phaser';
+import CreateJoinScene from './CreateJoinScene';
+import { createButton } from './Button';
 
 export default class PreloadScene extends Phaser.Scene {
   constructor() {
@@ -6,117 +8,162 @@ export default class PreloadScene extends Phaser.Scene {
   }
 
   preload() {
-    // Create loading bar
-    const loadingBar = this.add.graphics();
-    const loadingBox = this.add.graphics();
-    
-    loadingBox.fillStyle(0x222222, 0.8);
-    loadingBox.fillRect(this.cameras.main.width / 2 - 160, this.cameras.main.height / 2 - 25, 320, 50);
-    
-    const loadingText = this.add.text(
-      this.cameras.main.width / 2, 
-      this.cameras.main.height / 2 - 50, 
-      'Loading...', 
-      {
-        fontSize: '20px',
-        fill: '#ffffff',
-        fontFamily: 'Arial'
-      }
-    ).setOrigin(0.5);
+    this.load.image('background', 'data:image/png;base64,...');
+    this.load.image('character', 'data:image/png;base64,...');
 
-    this.load.on('progress', (percentage) => {
-      loadingBar.clear();
-      loadingBar.fillStyle(0x2563eb, 1);
-      loadingBar.fillRect(
-        this.cameras.main.width / 2 - 150, 
-        this.cameras.main.height / 2 - 15, 
-        300 * percentage, 
-        30
-      );
-    });
-
-    this.load.on('complete', () => {
-      loadingBar.destroy();
-      loadingBox.destroy();
-      loadingText.destroy();
-      this.createPlayButton(); // Call our new method
-    });
-
-    // Load your assets
-    this.load.image('sky', 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
-    
-    // Load button image or create one programmatically
-    // If you want to use an image:
-    // this.load.image('play-button', 'assets/play-button.png');
+    this.createLoadingUI();
+    this.loadAssets();
   }
 
-  createPlayButton() {
-    // Add background
-    this.add.image(0, 0, 'sky').setOrigin(0).setScale(
-      this.cameras.main.width / 100, 
-      this.cameras.main.height / 100
-    );
+  createLoadingUI() {
+    const centerX = this.cameras.main.width / 2;
+    const centerY = this.cameras.main.height / 2;
 
-    // Create play button (graphics version)
-    const button = this.add.rectangle(
-      this.cameras.main.centerX,
-      this.cameras.main.centerY,
-      200,
-      60,
-      0x2563eb
-    )
-    .setInteractive()
-    .setStrokeStyle(2, 0xffffff);
+    this.createGradientBackground();
 
-    // Button text
-    const buttonText = this.add.text(
-      this.cameras.main.centerX,
-      this.cameras.main.centerY,
-      'PLAY', 
-      {
-        fontSize: '24px',
-        color: '#ffffff',
-        fontFamily: 'Arial'
-      }
-    ).setOrigin(0.5);
+    this.loadingBox = this.add.graphics();
+    this.loadingBox.fillStyle(0x000000, 0.3);
+    this.loadingBox.lineStyle(2, 0xffffff, 0.5);
+    this.loadingBox.fillRoundedRect(centerX - 160, centerY - 40, 320, 80, 10);
+    this.loadingBox.strokeRoundedRect(centerX - 160, centerY - 40, 320, 80, 10);
 
-    // Button hover effects
-    button.on('pointerover', () => {
-      button.setFillStyle(0x1d4ed8);
-      button.setScale(1.05);
+    this.loadingText = this.add.text(centerX, centerY - 60, 'Loading...', {
+      fontSize: '24px',
+      fill: '#ffffff',
+      fontFamily: 'Kanit',
+      fontWeight: 'bold'
+    }).setOrigin(0.5);
+
+    this.progressBarBg = this.add.graphics();
+    this.progressBarBg.fillStyle(0x000000, 0.3);
+    this.progressBarBg.fillRoundedRect(centerX - 150, centerY - 15, 300, 30, 15);
+
+    this.progressBar = this.add.graphics();
+  }
+
+  createGradientBackground() {
+    const gradient = this.add.graphics();
+    const height = this.cameras.main.height;
+    const width = this.cameras.main.width;
+    const steps = 50;
+    for (let i = 0; i < steps; i++) {
+      const ratio = i / (steps - 1);
+      const r = Math.round(66 + (139 - 66) * ratio);
+      const g = Math.round(133 + (69 - 133) * ratio);
+      const b = Math.round(244 + (196 - 244) * ratio);
+      const color = (r << 16) | (g << 8) | b;
+      gradient.fillStyle(color, 1);
+      gradient.fillRect(0, (height / steps) * i, width, height / steps + 1);
+    }
+    gradient.setDepth(-10);
+  }
+
+  loadAssets() {
+    this.load.on('progress', (percentage) => {
+      this.updateProgressBar(percentage);
     });
-
-    button.on('pointerout', () => {
-      button.setFillStyle(0x2563eb);
-      button.setScale(1);
+    this.load.on('complete', () => {
+      this.cleanupLoadingUI();
+      this.createMainMenuUI();
     });
+  }
 
-    // Start game when clicked
-    button.on('pointerdown', () => {
-      // Add button click effect
-      this.tweens.add({
-        targets: button,
-        scale: 0.95,
-        duration: 100,
-        yoyo: true,
-        onComplete: () => {
-          this.scene.start('GameScene');
-        }
-      });
-    });
+  updateProgressBar(percentage) {
+    const centerX = this.cameras.main.width / 2;
+    const centerY = this.cameras.main.height / 2;
+    this.progressBar.clear();
+    const barWidth = 300 * percentage;
+    const steps = Math.max(1, Math.floor(barWidth / 10));
+    for (let i = 0; i < steps; i++) {
+      const ratio = i / Math.max(1, steps - 1);
+      const r = Math.round(0 + (255 - 0) * ratio);
+      const g = Math.round(191 + (255 - 191) * ratio);
+      const b = 255;
+      const color = (r << 16) | (g << 8) | b;
+      this.progressBar.fillStyle(color, 1);
+      this.progressBar.fillRect(centerX - 150 + (barWidth / steps) * i, centerY - 15, barWidth / steps + 1, 30);
+    }
+    this.progressBar.fillStyle(0x00bfff, 1);
+    this.progressBar.fillRoundedRect(centerX - 150, centerY - 15, barWidth, 30, 15);
+  }
 
-    // Add title text (optional)
-    this.add.text(
-      this.cameras.main.centerX,
-      this.cameras.main.centerY - 100,
-      'MY GAME',
-      {
-        fontSize: '48px',
-        color: '#ffffff',
-        fontFamily: 'Arial',
-        stroke: '#000000',
-        strokeThickness: 4
-      }
-    ).setOrigin(0.5);
+  cleanupLoadingUI() {
+    this.progressBar.destroy();
+    this.progressBarBg.destroy();
+    this.loadingBox.destroy();
+    this.loadingText.destroy();
+  }
+
+  createMainMenuUI() {
+    this.createGradientBackground();
+    this.createSidebar();
+    this.createCharacter();
+    this.createMainButtons();
+  }
+
+  createSidebar() {
+    const padding = 30;
+    const centerX = this.cameras.main.centerX;
+    const offsetX = -250;
+    const baseY = this.cameras.main.centerY - 100;
+
+    const leaderboardBtn = createButton.call(this, centerX + offsetX, baseY, 'Leaderboard', 0xff4757, 0xff6b6b);
+    const shopBtn = createButton.call(this, centerX + offsetX, baseY + 90, 'Shop', 0x2ed573, 0x3af38f);
+    const createJoinBtn = createButton.call(this, centerX + offsetX, baseY + 180, 'Create/Join', 0xfbc531, 0xffeaa7);
+
+    leaderboardBtn.on('pointerdown', () => console.log('Leaderboard clicked'));
+    shopBtn.on('pointerdown', () => console.log('Shop clicked'));
+    createJoinBtn.on('pointerdown', () => this.scene.launch('CreateJoinScene'));
+  }
+
+  createCharacter() {
+    const centerX = this.cameras.main.centerX;
+    const centerY = this.cameras.main.centerY;
+
+    this.character = this.add.image(centerX, centerY, 'character');
+    this.character.setScale(3);
+
+    this.add.text(centerX, centerY - 100, 'Falcon.962', {
+      fontSize: '20px',
+      fontFamily: 'Kanit',
+      fontStyle: 'bold',
+      color: '#000000',
+      backgroundColor: '#ffffff',
+      padding: { left: 10, right: 10, top: 5, bottom: 5 }
+    }).setOrigin(0.5);
+
+    this.createArrowButton(centerX - 100, centerY, '<', () => console.log('Left'));
+    this.createArrowButton(centerX + 100, centerY, '>', () => console.log('Right'));
+  }
+
+  createArrowButton(x, y, label, callback) {
+    const button = this.add.graphics();
+    button.fillStyle(0xffffff, 0.8);
+    button.lineStyle(2, 0x000000, 1);
+    button.fillCircle(x, y, 25);
+    button.strokeCircle(x, y, 25);
+
+    button.setInteractive(new Phaser.Geom.Circle(x, y, 25), Phaser.Geom.Circle.Contains);
+
+    const text = this.add.text(x, y, label, {
+      fontSize: '20px',
+      fontFamily: 'Kanit',
+      fontStyle: 'bold',
+      color: '#000'
+    }).setOrigin(0.5);
+
+    button.on('pointerdown', callback);
+  }
+
+  createMainButtons() {
+    const centerX = this.cameras.main.centerX;
+    const baseY = this.cameras.main.centerY - 40;
+    const offsetX = 250;
+
+    const playBtn = createButton.call(this, centerX + offsetX, baseY, 'Play', 0xffd700, 0xffed4a);
+    const bestRegionBtn = createButton.call(this, centerX + offsetX, baseY + 90, 'Best Region', 0x00bfff, 0x33ccff);
+
+    playBtn.on('pointerdown', () => this.scene.start('GameScene'));
+    bestRegionBtn.on('pointerdown', () => console.log('Best Region clicked'));
   }
 }

@@ -1,203 +1,275 @@
-// Player.js
-import Phaser from 'phaser';
-import { GAME_CONFIG, COLORS } from '../utils/constants.js';
-import { createStickman } from '../utils/helpers.js';
-import Bullet from './Bullet.js';
-
+import Phaser from 'phaser'
+import { GAME_CONFIG, COLORS } from '../utils/constants.js'
+import { createStickman } from '../utils/helpers.js'
+import Bullet from './Bullet.js'
+import GunPickup from './GunPickup.js'
 export default class Player {
   constructor(scene, x, y) {
-    this.scene = scene;
-    this.health = GAME_CONFIG.PLAYER.MAX_HEALTH;
-    this.maxHealth = GAME_CONFIG.PLAYER.MAX_HEALTH;
-    this.isInvulnerable = false;
-    this.lastShotTime = 0;
-    this.shootCooldown = 200;
+    this.scene = scene
+    this.health = GAME_CONFIG.PLAYER.MAX_HEALTH
+    this.maxHealth = GAME_CONFIG.PLAYER.MAX_HEALTH
+    this.isInvulnerable = false
+    this.lastShotTime = 0
+    this.shootCooldown = 200
 
     // Create physics sprite
-    this.sprite = scene.physics.add.sprite(x, y, null);
-    this.sprite.setSize(GAME_CONFIG.PLAYER.SIZE.width, GAME_CONFIG.PLAYER.SIZE.height);
-    this.sprite.setCollideWorldBounds(true);
-    this.sprite.setBounce(0.1);
-    this.sprite.playerInstance = this; // Reference for collision detection
+    this.sprite = scene.physics.add.sprite(x, y, null)
+    this.sprite.setSize(GAME_CONFIG.PLAYER.SIZE.width, GAME_CONFIG.PLAYER.SIZE.height)
+    this.sprite.setCollideWorldBounds(true)
+    this.sprite.setBounce(0.1)
+    this.sprite.playerInstance = this // Reference for collision detection
 
     // Create visual stickman
-    this.stickman = createStickman(scene, x, y, COLORS.PLAYER);
+    this.stickman = createStickman(scene, x, y, COLORS.PLAYER)
 
     // Bullets group
-    this.bullets = scene.physics.add.group();
+    this.bullets = scene.physics.add.group()
 
     // Muzzle flash effect
-    this.muzzleFlash = scene.add.circle(x, y, 8, 0xfbbf24, 0.8);
-    this.muzzleFlash.setVisible(false);
+    this.muzzleFlash = scene.add.circle(x, y, 8, 0xfbbf24, 0.8)
+    this.muzzleFlash.setVisible(false)
 
     // Animation properties
-    this.direction = 1;
-    this.animationState = 'idle';
-    this.walkTimer = 0;
+    this.direction = 1 // 1 = right, -1 = left
+    this.animationState = 'idle'
+    this.walkTimer = 0
+this.defaultGun = {
+  fireRate: GAME_CONFIG.PLAYER.SHOOT_COOLDOWN || 200,
+  damage: GAME_CONFIG.PLAYER.BULLET_DAMAGE || 25
+};
+this.currentGun = { ...this.defaultGun };
+this.specialGunBulletsLeft = 0;
+
+    // Game over flag
+    this.isDead = false
   }
 
   update(keys) {
-    const speed = GAME_CONFIG.PLAYER.SPEED;
-    let moving = false;
+    if (this.isDead) return
+
+    const speed = GAME_CONFIG.PLAYER.SPEED
+    let moving = false
 
     // Horizontal movement
     if (keys.A.isDown) {
-      this.sprite.setVelocityX(-speed);
-      this.direction = -1;
-      moving = true;
-      this.animationState = 'walking';
+      this.sprite.setVelocityX(-speed)
+      this.direction = -1
+      moving = true
+      this.animationState = 'walking'
     } else if (keys.D.isDown) {
-      this.sprite.setVelocityX(speed);
-      this.direction = 1;
-      moving = true;
-      this.animationState = 'walking';
+      this.sprite.setVelocityX(speed)
+      this.direction = 1
+      moving = true
+      this.animationState = 'walking'
     } else {
-      this.sprite.setVelocityX(0);
-      this.animationState = 'idle';
+      this.sprite.setVelocityX(0)
+      this.animationState = 'idle'
     }
 
     // Jumping
     if (keys.W.isDown && this.sprite.body.touching.down) {
-      this.sprite.setVelocityY(GAME_CONFIG.PLAYER.JUMP_VELOCITY);
-      this.animationState = 'jumping';
+      this.sprite.setVelocityY(GAME_CONFIG.PLAYER.JUMP_VELOCITY)
+      this.animationState = 'jumping'
     }
 
     // Shooting
-    if (keys.SPACE.isDown) {
-      this.shoot();
+    if (Phaser.Input.Keyboard.DownDuration(keys.SPACE, 200)) {
+      this.shoot()
     }
 
-    this.updateVisuals(moving);
-    this.updateBullets();
+    this.updateVisuals(moving)
+    this.updateBullets()
+
+    // Check if player is dead
+    if (this.health <= 0 && !this.isDead) {
+      this.isDead = true
+      this.scene.gameOver()
+    }
   }
 
   updateVisuals(moving) {
-    // Update stickman position to match physics sprite
-    this.stickman.group.x = this.sprite.x;
-    this.stickman.group.y = this.sprite.y;
+    if (this.isDead) return
+
+    // Sync container position with physics body
+    this.stickman.group.x = this.sprite.x
+    this.stickman.group.y = this.sprite.y
 
     // Walking animation
     if (this.animationState === 'walking' && moving) {
-      this.walkTimer += 0.2;
-      const wobble = Math.sin(this.walkTimer) * 2;
+      this.walkTimer += 0.2
+      const wobble = Math.sin(this.walkTimer) * 2
 
-      // Animate limbs (relative to group origin)
-      this.stickman.leftArm.x = -8 + wobble;
-      this.stickman.leftArm.y = -5;
-      this.stickman.leftArm.rotation = -0.3 + wobble * 0.1;
+      // Animate arms
+      this.stickman.leftArm.setPosition(-8 + wobble, -5).setRotation(-0.3 + wobble * 0.1)
+      this.stickman.rightArm.setPosition(8 - wobble, -5).setRotation(0.3 - wobble * 0.1)
 
-      this.stickman.rightArm.x = 8 - wobble;
-      this.stickman.rightArm.y = -5;
-      this.stickman.rightArm.rotation = 0.3 - wobble * 0.1;
-
-      this.stickman.leftLeg.x = -6 + wobble;
-      this.stickman.leftLeg.y = 15;
-      this.stickman.leftLeg.rotation = -0.2 + wobble * 0.2;
-
-      this.stickman.rightLeg.x = 6 - wobble;
-      this.stickman.rightLeg.y = 15;
-      this.stickman.rightLeg.rotation = 0.2 - wobble * 0.2;
+      // Animate legs
+      this.stickman.leftLeg.setPosition(-6 + wobble, 15).setRotation(-0.2 + wobble * 0.2)
+      this.stickman.rightLeg.setPosition(6 - wobble, 15).setRotation(0.2 - wobble * 0.2)
     } else {
-      // Reset to idle position
-      this.stickman.leftArm.setPosition(-8, -5).setRotation(-0.3);
-      this.stickman.rightArm.setPosition(8, -5).setRotation(0.3);
-      this.stickman.leftLeg.setPosition(-6, 15).setRotation(-0.2);
-      this.stickman.rightLeg.setPosition(6, 15).setRotation(0.2);
+      this.walkTimer = 0
+
+      // Static idle pose
+      this.stickman.leftArm.setPosition(-8, -5).setRotation(-0.3)
+      this.stickman.rightArm.setPosition(8, -5).setRotation(0.3)
+      this.stickman.leftLeg.setPosition(-6, 15).setRotation(-0.2)
+      this.stickman.rightLeg.setPosition(6, 15).setRotation(0.2)
     }
 
-    // Flip sprite based on direction
-    this.stickman.group.setScale(this.direction, 1);
+    // Flip based on direction
+    this.stickman.group.setScale(this.direction === -1 ? -1 : 1, 1)
   }
 
-  shoot() {
-    const currentTime = this.scene.time.now;
-    if (currentTime - this.lastShotTime < this.shootCooldown) return;
+shoot() {
+  if (this.isDead) return;
 
-    this.lastShotTime = currentTime;
-        
-    // Create bullet
-    const bullet = new Bullet(
-      this.scene,
-      this.sprite.x + this.direction * 20,
-      this.sprite.y - 5,
-      this.direction
-    );
+  const currentTime = this.scene.time.now;
+  if (currentTime - this.lastShotTime < this.currentGun.fireRate) return;
 
-    this.bullets.add(bullet.sprite);
+  this.lastShotTime = currentTime;
 
-    // Muzzle flash effect
-    this.muzzleFlash.x = this.sprite.x + this.direction * 25;
-    this.muzzleFlash.y = this.sprite.y - 5;
-    this.muzzleFlash.setVisible(true).setScale(1.5);
+  const offsetX = this.direction * 20;
+  const bullet = new Bullet(
+    this.scene,
+    this.sprite.x + offsetX,
+    this.sprite.y - 5,
+    this.direction,
+    this.currentGun.damage // Use current gun's damage
+  );
 
-    this.scene.tweens.add({
-      targets: this.muzzleFlash,
-      scaleX: 0.5,
-      scaleY: 0.5,
-      alpha: 0,
-      duration: 100,
-      onComplete: () => {
-        this.muzzleFlash.setVisible(false).setAlpha(0.8).setScale(1);
-      }
-    });
+  bullet.owner = 'player';
+  bullet.sprite.bulletInstance = bullet;
 
-    // Shooting animation
-    this.scene.tweens.add({
-      targets: this.stickman.rightArm,
-      scaleX: 1.3,
-      duration: 100,
-      yoyo: true
-    });
+  this.bullets.add(bullet.sprite);
+
+  // 🔥 Muzzle flash
+  this.muzzleFlash.setPosition(this.sprite.x + this.direction * 25, this.sprite.y - 5);
+  this.muzzleFlash.setVisible(true).setScale(1.5);
+
+  this.scene.tweens.add({
+    targets: this.muzzleFlash,
+    scaleX: 0.5,
+    scaleY: 0.5,
+    alpha: 0,
+    duration: 100,
+    onComplete: () => {
+      this.muzzleFlash.setVisible(false).setAlpha(0.8).setScale(1);
+    }
+  });
+
+  // 🦾 Arm animation
+  this.scene.tweens.add({
+    targets: [this.stickman.rightArm],
+    scaleX: 1.3,
+    duration: 100,
+    yoyo: true
+  });
+
+  // 🔁 Track special gun usage
+  if (this.specialGunBulletsLeft > 0) {
+    this.specialGunBulletsLeft--;
+    if (this.specialGunBulletsLeft === 0) {
+      this.currentGun = { ...this.defaultGun };
+    }
   }
+}
+
+  switchGun(gunConfig) {
+  this.currentGun = {
+    fireRate: gunConfig.fireRate,
+    damage: gunConfig.damage
+  };
+  this.specialGunBulletsLeft = gunConfig.bulletsToFire;
+}
+
+increaseHealth(amount) {
+  this.health = Math.min(this.health + amount, this.maxHealth);
+
+  // Optional: Visual feedback
+  this.applyTintToStickman(0x10b981); // green flash
+  this.scene.time.delayedCall(200, () => {
+    this.resetVisuals();
+  });
+}
 
   updateBullets() {
-    this.bullets.children.entries.forEach(bulletSprite => {
-      if (bulletSprite.bulletInstance) {
-        bulletSprite.bulletInstance.update();
+    if (this.isDead) return
+
+    this.bullets.children.each(bulletSprite => {
+      if (bulletSprite.bulletInstance?.update) {
+        bulletSprite.bulletInstance.update()
       }
-    });
+    })
   }
 
   takeDamage(amount) {
-    if (this.isInvulnerable) return;
+    if (this.isDead || this.isInvulnerable) return
 
-    this.health = Math.max(0, this.health - amount);
-    console.log(this.health)
-    // Damage flash effect
-    this.stickman.group.setTint(0xff6b6b);
-    this.scene.time.delayedCall(200, () => {
-      this.stickman.group.clearTint();
-    });
+    this.health = Math.max(0, this.health - amount)
+
+    // Visual damage feedback
+    this.applyTintToStickman(0xff6b6b) // Red flash
 
     // Screen shake
-    this.scene.cameras.main.shake(200, 0.01);
+    this.scene.cameras.main.shake(200, 0.01)
 
-    // Temporary invulnerability
-    this.setInvulnerable(1000);
+    // Reset visuals after delay
+    this.scene.time.delayedCall(200, () => {
+      this.resetVisuals()
+    })
+
+    // Invulnerability frames
+    this.setInvulnerable(500)
   }
 
-  setInvulnerable(duration) {
-    this.isInvulnerable = true;
+  applyTintToStickman(color) {
+    this.stickman.head.setFillStyle(color)
+    this.stickman.body.setFillStyle(color)
+    this.stickman.leftArm.setFillStyle(color)
+    this.stickman.rightArm.setFillStyle(color)
+    this.stickman.leftLeg.setFillStyle(color)
+    this.stickman.rightLeg.setFillStyle(color)
+  }
+
+  resetVisuals() {
+    this.stickman.head.setFillStyle(COLORS.PLAYER)
+    this.stickman.body.setFillStyle(COLORS.PLAYER)
+    this.stickman.leftArm.setFillStyle(COLORS.PLAYER)
+    this.stickman.rightArm.setFillStyle(COLORS.PLAYER)
+    this.stickman.leftLeg.setFillStyle(COLORS.PLAYER)
+    this.stickman.rightLeg.setFillStyle(COLORS.PLAYER)
+  }
+
+  setInvulnerable(duration = 500) {
+    this.isInvulnerable = true
 
     // Flashing effect
     this.scene.tweens.add({
-      targets: this.stickman.group,
+      targets: [
+        this.stickman.head,
+        this.stickman.body,
+        this.stickman.leftArm,
+        this.stickman.rightArm,
+        this.stickman.leftLeg,
+        this.stickman.rightLeg
+      ],
       alpha: 0.5,
       duration: 100,
       yoyo: true,
-      repeat: Math.floor(duration / 200)
-    });
+      repeat: Math.floor(duration / 200),
+      ease: 'Linear'
+    })
 
     this.scene.time.delayedCall(duration, () => {
-      this.isInvulnerable = false;
-      this.stickman.group.setAlpha(1);
-    });
+      this.isInvulnerable = false
+      this.resetVisuals()
+    })
   }
 
   destroy() {
-    this.stickman.group.destroy();
-    this.muzzleFlash.destroy();
-    this.sprite.destroy();
-    this.bullets.destroy();
+    this.stickman.group.destroy()
+    this.muzzleFlash.destroy()
+    this.sprite.destroy()
+    this.bullets.destroyEach()
   }
 }

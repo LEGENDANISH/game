@@ -6,8 +6,9 @@ export const GAME_CONFIG = {
     SIZE: { width: 20, height: 40 }
   },
   BULLET: {
-    SPEED: 600,
-    SIZE: { width: 8, height: 3 }
+    SPEED: 300,
+    SIZE: { width: 8, height: 3 },
+    DAMAGE: 25
   },
   ENEMY: {
     SPEED: 50,
@@ -26,7 +27,12 @@ export const GAME_CONFIG = {
   },
   DAMAGE:{
 
-  }
+  },
+  PLATFORM: {
+    SMALL: { width: 100, height: 20 },
+    MEDIUM: { width: 200, height: 30 },
+    LARGE: { width: 300, height: 40 },
+  },
 }
 
 export const CONTROLS = {
