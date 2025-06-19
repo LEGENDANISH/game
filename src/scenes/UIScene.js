@@ -45,26 +45,28 @@ export default class UIScene extends Phaser.Scene {
       fontWeight: 'bold'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(103);
 
-    // Enemy counter (moved from GameScene)
-this.enemyCounterBg = this.add.rectangle(
-  this.cameras.main.centerX,
-  30,
-  150,
-  40,
-  0x000000,
-  0.5
-).setOrigin(0.5).setScrollFactor(0).setDepth(50);
+    // Enemy counter
+    this.enemyCounterBg = this.add.rectangle(
+      this.cameras.main.centerX,
+      30,
+      150,
+      40,
+      0x000000,
+      0.5
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(50);
 
-this.enemyCounterText = this.add.text(
-  this.cameras.main.centerX,
-  30,
-  `Enemies: 0`,
-  {
-    fontSize: '18px',
-    fontFamily: 'Arial',
-    color: '#ffffff'
-  }
-).setOrigin(0.5).setScrollFactor(0).setDepth(51);    // Controls help
+    this.enemyCounterText = this.add.text(
+      this.cameras.main.centerX,
+      30,
+      `Enemies: 0`,
+      {
+        fontSize: '18px',
+        fontFamily: 'Arial',
+        color: '#ffffff'
+      }
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(51);
+
+    // Controls help
     this.controlsText = this.add.text(this.cameras.main.width - 20, 20,
       'WASD: Move & Jump\nSPACE: Shoot', {
       fontSize: '14px',
@@ -117,21 +119,32 @@ this.enemyCounterText = this.add.text(
       enemiesAlive: 0,
       isGameOver: false
     };
+
+    // Flag to indicate UI is ready
+    this.isUILoaded = true;
   }
 
   updateGameData(data) {
+    if (!this.isUILoaded) return;
+
     this.gameData = { ...this.gameData, ...data };
 
     // Update kill count
-    this.killCountText.setText(`Kills: ${this.gameData.killCount}`);
+    if (this.killCountText && this.killCountText.active) {
+      this.killCountText.setText(`Kills: ${this.gameData.killCount}`);
+    }
 
     // Update time
     const minutes = Math.floor(this.gameData.gameTime / 60);
     const seconds = this.gameData.gameTime % 60;
-    this.gameTimeText.setText(`Time: ${minutes}:${seconds.toString().padStart(2, '0')}`);
+    if (this.gameTimeText && this.gameTimeText.active) {
+      this.gameTimeText.setText(`Time: ${minutes}:${seconds.toString().padStart(2, '0')}`);
+    }
 
     // Update enemies alive
-    this.enemyCounterText.setText(`Enemies: ${this.gameData.enemiesAlive}`);
+    if (this.enemyCounterText && this.enemyCounterText.active) {
+      this.enemyCounterText.setText(`Enemies: ${this.gameData.enemiesAlive}`);
+    }
 
     // Update health bar
     this.updateHealthBar();
@@ -143,6 +156,8 @@ this.enemyCounterText = this.add.text(
   }
 
   updateHealthBar() {
+    if (!this.isUILoaded) return;
+
     const healthRatio = this.gameData.health / this.gameData.maxHealth;
     const barWidth = 190;
     const currentWidth = barWidth * healthRatio;
@@ -151,7 +166,9 @@ this.enemyCounterText = this.add.text(
     this.healthBar.fillStyle(getHealthColor(this.gameData.health, this.gameData.maxHealth));
     this.healthBar.fillRoundedRect(30, 105, currentWidth, 10, 3);
 
-    this.healthText.setText(`${this.gameData.health}/${this.gameData.maxHealth}`);
+    if (this.healthText && this.healthText.active) {
+      this.healthText.setText(`${this.gameData.health}/${this.gameData.maxHealth}`);
+    }
 
     if (healthRatio < 0.3) {
       this.tweens.add({
@@ -165,6 +182,8 @@ this.enemyCounterText = this.add.text(
   }
 
   showGameOverUI() {
+    if (!this.isUILoaded) return;
+
     this.overlay.setVisible(true);
     this.gameOverText.setVisible(true);
     this.countdownText.setVisible(true);
@@ -172,7 +191,11 @@ this.enemyCounterText = this.add.text(
     this.countdown = 5;
     this.countdownText.setText(`Restarting in ${this.countdown}...`);
 
-    if (this.countdownTimer) this.countdownTimer.remove();
+    // Remove any existing countdown timer
+    if (this.countdownTimer) {
+      this.countdownTimer.remove();
+      this.countdownTimer = null;
+    }
 
     this.countdownTimer = this.time.addEvent({
       delay: 1000,
@@ -180,15 +203,31 @@ this.enemyCounterText = this.add.text(
         this.countdown--;
         this.countdownText.setText(`Restarting in ${this.countdown}...`);
         if (this.countdown <= 0) {
-          this.scene.get('GameScene')?.restartGame();
+          this.countdownTimer.remove();
+          this.countdownTimer = null;
+          const gameScene = this.scene.get('GameScene');
+          if (gameScene) {
+            gameScene.restartGame();
+          }
         }
       },
       callbackScope: this,
-      repeat: 5
+      loop: false,
+      repeat: 4
     });
   }
 
   resize() {
-    this.controlsText.x = this.cameras.main.width - 20;
+    if (this.controlsText && this.controlsText.active) {
+      this.controlsText.x = this.cameras.main.width - 20;
+    }
+  }
+
+  destroy() {
+    if (this.countdownTimer) {
+      this.countdownTimer.remove();
+      this.countdownTimer = null;
+    }
+    this.isUILoaded = false;
   }
 }

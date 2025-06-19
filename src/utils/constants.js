@@ -8,7 +8,7 @@ export const GAME_CONFIG = {
   BULLET: {
     SPEED: 300,
     SIZE: { width: 8, height: 3 },
-    DAMAGE: 25
+    DAMAGE: 250
   },
   ENEMY: {
     SPEED: 50,
