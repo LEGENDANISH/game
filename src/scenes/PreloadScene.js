@@ -110,6 +110,10 @@ export default class PreloadScene extends Phaser.Scene {
     const leaderboardBtn = createButton.call(this, centerX + offsetX, baseY, 'Leaderboard', 0xff4757, 0xff6b6b);
     const shopBtn = createButton.call(this, centerX + offsetX, baseY + 90, 'Shop', 0x2ed573, 0x3af38f);
     const createJoinBtn = createButton.call(this, centerX + offsetX, baseY + 180, 'Create/Join', 0xfbc531, 0xffeaa7);
+    
+    const multiplayerBtn = createButton.call(this, centerX +20, baseY-50, 'Multiplayer', 0xff4757, 0xff6b6b);
+multiplayerBtn.on('pointerdown', () => this.scene.start('MultiplayerScene'));
+
 
     leaderboardBtn.on('pointerdown', () => console.log('Leaderboard clicked'));
     shopBtn.on('pointerdown', () => console.log('Shop clicked'));

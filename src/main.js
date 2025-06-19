@@ -3,7 +3,7 @@ import PreloadScene from './scenes/PreloadScene.js';
 import GameScene from './scenes/GameScene.js';
 import UIScene from './scenes/UIScene.js';
 import CreateJoinScene from './scenes/CreateJoinScene.js'; // Import the new scene
-
+import MultiplayerScene from './scenes/MiltiplayerScene.js';
 const config = {
   
   type: Phaser.AUTO,
@@ -21,7 +21,7 @@ const config = {
       debug: false
     }
   },
-  scene: [PreloadScene,CreateJoinScene, GameScene, UIScene]
+  scene: [PreloadScene,CreateJoinScene, GameScene, UIScene,MultiplayerScene]
   
 };
 

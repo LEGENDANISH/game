@@ -6,8 +6,6 @@ import HealthPickup from '../entities/HealthPickup.js';
 import { GAME_CONFIG, COLORS } from '../utils/constants.js';
 import GunPickup from '../entities/GunPickup.js'
 import createBackground from './createBackground.js';
-import NetworkManager from './network.js'
-
 export default class GameScene extends Phaser.Scene {
   constructor() {
     super({ key: 'GameScene' });
@@ -38,7 +36,6 @@ createBackground(this);
     this.uiScene = this.scene.get('UIScene');
     this.gunPickups = this.physics.add.group();
     this.spawnGunPickups();
-    this.network = new NetworkManager(this)
   }
 
   setupWorld() {
@@ -346,7 +343,6 @@ spawnGunPickups() {
     if (this.player && this.player.health <= 0) {
       this.gameOver();
     }
-    this.network.sendPlayerMovement(this.player)
   }
 
   updateUI() {
@@ -371,9 +367,4 @@ spawnGunPickups() {
       this.countdownTimer.destroy();
     }
   }
-  spawnBulletFromOtherPlayer(id, x, y, direction) {
-  const bullet = this.physics.add.sprite(x, y, null)
-  bullet.setVelocityX(direction * 300)
-  this.physics.add.collider(bullet, this.ground, () => bullet.destroy())
-}
 }
