@@ -87,7 +87,9 @@ export default class NetworkManager {
       case 'GAME_STARTED':
         this.handleGameStarted(data);
         break;
-
+case 'HEALTH_UPDATE':
+  this.handlePlayerHealth(data);
+  break;
       case 'GAME_ENDED':
         this.handleGameEnded(data);
         break;
@@ -185,7 +187,12 @@ export default class NetworkManager {
     console.log('[NetworkManager] Game ended', data);
     this.events.emit('gameEnded', data);
   }
-
+handlePlayerHealth(data) {
+  if (this.players[data.playerId]) {
+    this.players[data.playerId].health = data.health;
+  }
+  this.events.emit('healthUpdate', data);
+}
   handleRoomClosed(data) {
     console.log('[NetworkManager] Room closed', data);
     this.events.emit('roomClosed', data);
@@ -247,7 +254,15 @@ export default class NetworkManager {
       data: shotData
     });
   }
-
+sendPlayerHealth(health) {
+  console.log('[NetworkManager] Sending player health:', health);
+  this.sendPlayerAction({
+    type: 'HEALTH_UPDATE',
+    data: {
+      health: health
+    }
+  });
+}
   sendMessage(type, data = {}) {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       const message = JSON.stringify({ type, data });

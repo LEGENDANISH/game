@@ -2,13 +2,19 @@ import Phaser from 'phaser';
 import createBackground from './createBackground.js';
 import NetworkManager from './network.js';
 import Player from '../entities/Player.js';
+import { GAME_CONFIG } from '../utils/constants.js';
 import Platform from '../entities/Platform.js';
-import { GAME_CONFIG, COLORS } from '../utils/constants.js';
+
+// Modular setup helpers
+import setupWorld from './helpers/setupWorld.js';
+import createPlatforms from './helpers/createPlatforms.js';
+import setupCamera from './helpers/setupCamera.js';
+import setupInput from './helpers/setupInput.js';
 
 export default class MultiplayerScene extends Phaser.Scene {
   constructor() {
     super({ key: 'MultiplayerScene' });
-    this.remotePlayers = new Map(); // Better performance than plain object
+    this.remotePlayers = new Map();
     this.localPlayer = null;
     this.localPlayerId = null;
     this.otherPlayersGroup = null;
@@ -25,7 +31,6 @@ export default class MultiplayerScene extends Phaser.Scene {
   create() {
     createBackground(this);
 
-    // Debug graphics
     this.debugGraphics = this.add.graphics();
     this.debugText = this.add.text(10, 10, '', {
       font: '16px Arial',
@@ -33,71 +38,31 @@ export default class MultiplayerScene extends Phaser.Scene {
       backgroundColor: '#000000'
     }).setScrollFactor(0);
 
-    this.setupWorld();
-    this.createPlatforms();
+    // 🧩 Modular setup
+    setupWorld(this);
+    createPlatforms(this);
     this.createLocalPlayer();
-    this.setupCamera();
+    setupCamera(this);
     this.setupCollisions();
-    this.setupInput();
+    setupInput(this);
 
-    // UI Scene
     this.scene.launch('UIScene');
     this.uiScene = this.scene.get('UIScene');
 
-    // Setup network
     this.network = new NetworkManager(this);
     this.network.connect();
     this.setupNetworkEvents();
   }
 
-  setupWorld() {
-    this.physics.world.setBounds(0, 0, GAME_CONFIG.WORLD.WIDTH, GAME_CONFIG.WORLD.HEIGHT);
-    this.ground = this.physics.add.staticGroup();
-
-    const groundSprite = this.add.rectangle(
-      GAME_CONFIG.WORLD.WIDTH / 2,
-      GAME_CONFIG.WORLD.HEIGHT - GAME_CONFIG.WORLD.GROUND_HEIGHT / 2,
-      GAME_CONFIG.WORLD.WIDTH,
-      GAME_CONFIG.WORLD.GROUND_HEIGHT,
-      COLORS.GROUND
-    );
-    this.ground.add(groundSprite);
-    this.physics.add.existing(groundSprite, true);
-  }
-
-  createPlatforms() {
-    this.platforms = this.physics.add.staticGroup();
-    const platformData = [
-      { x: 300, y: 600, size: 'MEDIUM' },
-      { x: 600, y: 500, size: 'SMALL' },
-      { x: 900, y: 450, size: 'LARGE' },
-      { x: 1300, y: 400, size: 'MEDIUM' },
-      { x: 1600, y: 350, size: 'SMALL' },
-      { x: 1900, y: 300, size: 'LARGE' },
-      { x: 2300, y: 500, size: 'MEDIUM' },
-      { x: 2600, y: 400, size: 'SMALL' },
-    ];
-
-    platformData.forEach(data => {
-      const platform = new Platform(this, data.x, data.y, data.size);
-      this.platforms.add(platform.sprite);
-      this.physics.add.existing(platform.sprite, true);
-    });
-  }
-
+  
+  
   createLocalPlayer() {
     this.localPlayer = new Player(this, 100, 600, 'local');
     this.otherPlayersGroup = this.physics.add.group();
     this.localPlayer.sprite.setCollideWorldBounds(true);
   }
 
-  setupCamera() {
-    this.cameras.main.setBounds(0, 0, GAME_CONFIG.WORLD.WIDTH, GAME_CONFIG.WORLD.HEIGHT);
-    this.cameras.main.startFollow(this.localPlayer.sprite, true, 0.1, 0.1);
-    this.cameras.main.setDeadzone(200, 100);
-    this.cameras.main.setZoom(1.0);
-  }
-
+  
   setupCollisions() {
     this.physics.add.collider(this.localPlayer.sprite, this.ground);
     this.physics.add.collider(this.localPlayer.sprite, this.platforms);
@@ -106,18 +71,7 @@ export default class MultiplayerScene extends Phaser.Scene {
     this.physics.add.collider(this.localPlayer.sprite, this.otherPlayersGroup, null, null, this);
   }
 
-  setupInput() {
-    this.cursors = this.input.keyboard.createCursorKeys();
-    this.wasd = this.input.keyboard.addKeys('W,S,A,D,SPACE');
-    
-    // Add shooting input
-    this.input.on('pointerdown', (pointer) => {
-      if (this.localPlayer && this.network?.isConnected) {
-        this.handleShooting(pointer);
-      }
-    });
-  }
-
+  
   update(time, delta) {
     if (!this.localPlayer || !this.localPlayer.sprite.active) return;
 
@@ -180,10 +134,22 @@ export default class MultiplayerScene extends Phaser.Scene {
           y: Math.round(velocity.y)
         },
         rotation: sprite.flipX ? Math.PI : 0, // Simple rotation based on flip
-        flipX: sprite.flipX
+        flipX: sprite.flipX,
+        health: this.localPlayer.health, // Add health data
+      maxHealth: this.localPlayer.maxHealth // Add max health if needed
       }
     });
   }
+  // MultiplayerScene.js
+
+sendHealthUpdate() {
+  if (this.network && this.localPlayer) {
+    this.network.sendPlayerAction({
+      type: 'HEALTH_UPDATE',
+      data: { health: this.localPlayer.health }
+    });
+  }
+}
 
   handleShooting(pointer) {
     const sprite = this.localPlayer.sprite;
@@ -206,6 +172,7 @@ export default class MultiplayerScene extends Phaser.Scene {
         rotation: rotation
       }
     });
+    this.sendHealthUpdate();
   }
 
   setupNetworkEvents() {
@@ -300,7 +267,32 @@ export default class MultiplayerScene extends Phaser.Scene {
         data.rotation || 0
       );
     });
+safeEmit('damageTaken', (data) => {
+  const { playerId, health } = data;
+  if (!playerId || playerId === this.localPlayerId) return;
 
+  const remotePlayer = this.remotePlayers.get(playerId);
+  if (remotePlayer?.sprite?.playerInstance) {
+    remotePlayer.sprite.playerInstance.updateHealth(health);
+  }
+});
+safeEmit('healthUpdate', (data) => {
+  if (data.playerId === this.localPlayerId) {
+    this.localPlayer.health = data.health;
+  } else {
+    const remotePlayer = this.remotePlayers.get(data.playerId);
+    if (remotePlayer?.sprite?.playerInstance) {
+      remotePlayer.sprite.playerInstance.health = data.health;
+      // Update visual health bar
+      const healthPercent = data.health / remotePlayer.sprite.playerInstance.maxHealth;
+      if (remotePlayer.healthBarFill) {
+        remotePlayer.healthBarFill.scaleX = healthPercent;
+        remotePlayer.healthBarFill.setFillStyle(healthPercent > 0.5 ? 0x00ff00 : healthPercent > 0.25 ? 0xffff00 : 0xff0000);
+      }
+    }
+  }
+  this.updateUI();
+});
     safeEmit('gameUpdate', (data) => {
       // Handle periodic game state updates from server
       if (data.state && data.state.players) {
@@ -320,33 +312,46 @@ export default class MultiplayerScene extends Phaser.Scene {
   }
 
   addRemotePlayer(id, x, y) {
-    if (this.remotePlayers.has(id)) {
-      console.warn(`Player ${id} already exists`);
-      return;
-    }
-
+     if (this.remotePlayers.has(id)) {
+    console.warn(`Player ${id} already exists, updating position instead`);
+    this.updateRemotePlayer(id, x, y, { x: 0, y: 0 }, false);
+    return;
+  }
     console.log(`Adding remote player ${id} at ${x},${y}`);
     const remotePlayer = new Player(this, x, y, 'remote');
-    remotePlayer.sprite.setTint(0xff0000); // Red tint
-    remotePlayer.sprite.setCollideWorldBounds(true);
-
+     if (remotePlayer.sprite.body) {
+    remotePlayer.sprite.body.setCollideWorldBounds(true);
+    remotePlayer.sprite.body.setGravityY(800); // Add gravity like local player
+    remotePlayer.sprite.body.setSize(32, 48); // Set proper collision box
+    remotePlayer.sprite.body.setOffset(0, 0);
+  }
+  
+  remotePlayer.sprite.setTint(0xff0000); // Red tint for remote players
+     
     // Add debug name tag
     const nameText = this.add.text(x, y - 40, `Player ${id.slice(-4)}`, {
       font: '16px Arial',
       fill: '#ffffff',
       backgroundColor: '#000000'
-    });
+    })
+    const healthBarBg = this.add.rectangle(x, y - 55, 50, 6, 0x000000);
+const healthBarFill = this.add.rectangle(x, y - 55, 50, 6, 0x00ff00);
+;
 
     this.otherPlayersGroup.add(remotePlayer.sprite);
     this.remotePlayers.set(id, {
       sprite: remotePlayer.sprite,
       text: nameText,
+      healthBarBg: healthBarBg,
+  healthBarFill: healthBarFill,
       lastUpdate: Date.now(),
       targetX: x,
       targetY: y,
       velocityX: 0,
       velocityY: 0
     });
+        console.log(`Created remote player ${id}`, remotePlayer.sprite);
+
   }
 
   updateRemotePlayer(id, x, y, velocity, flipX) {
@@ -360,15 +365,20 @@ export default class MultiplayerScene extends Phaser.Scene {
     // Store target for smooth interpolation
     player.targetX = x;
     player.targetY = y;
-    player.velocityX = velocity.x || 0;
-    player.velocityY = velocity.y || 0;
-    player.lastUpdate = Date.now();
+   player.velocityX = velocity.x;
+player.velocityY = velocity.y;
+player.lastUpdate = Date.now();
 
     // Update visual properties immediately
     player.sprite.setFlipX(flipX);
     if (player.text) {
       player.text.setPosition(x, y - 40);
     }
+    // Force immediate visual sync for better responsiveness
+if (player.sprite.playerInstance) {
+  player.sprite.playerInstance.updatePosition(x, y, flipX);
+}
+     console.log(`Updated player ${id} position`, x, y);
   }
 
   updateRemotePlayersInterpolation() {
@@ -388,21 +398,40 @@ export default class MultiplayerScene extends Phaser.Scene {
         player.sprite.setPosition(newX, newY);
         
         if (player.text) {
-          player.text.setPosition(newX, newY - 40);
+          player.text.setPosition(newX, newY );
         }
-      }
+        if (player.healthBarBg) {
+  player.healthBarBg.setPosition(newX, newY - 55);
+}
+if (player.healthBarFill) {
+  player.healthBarFill.setPosition(newX, newY - 55);
+}
+      } 
     });
   }
 
-  removeRemotePlayer(id) {
-    const player = this.remotePlayers.get(id);
-    if (player) {
-      player.sprite.destroy();
-      if (player.text) player.text.destroy();
-      this.remotePlayers.delete(id);
-      console.log(`Removed remote player ${id}`);
+ removeRemotePlayer(id) {
+  const player = this.remotePlayers.get(id);
+  if (player) {
+    // Remove from physics group first
+    if (this.otherPlayersGroup.contains(player.sprite)) {
+      this.otherPlayersGroup.remove(player.sprite);
     }
+    
+    // Destroy player components
+    if (player.sprite?.playerInstance) {
+      player.sprite.playerInstance.destroy();
+    } else {
+      if (player.sprite) player.sprite.destroy();
+    }
+    
+    if (player.text) player.text.destroy();
+    if (player.healthBarFill) player.healthBarFill.destroy();
+
+    this.remotePlayers.delete(id);
+    console.log(`[SCENE] Removed remote player ${id}`);
   }
+}
 
   spawnBulletFromOtherPlayer(id, x, y, rotation) {
     const bullet = this.physics.add.sprite(x, y, 'bullet');
@@ -423,6 +452,8 @@ export default class MultiplayerScene extends Phaser.Scene {
     this.physics.add.collider(bullet, this.ground, () => bullet.destroy());
     this.physics.add.overlap(bullet, this.localPlayer.sprite, () => {
       this.localPlayer.takeDamage(10);
+        this.sendHealthUpdate(); // ADD THIS LINE
+
       bullet.destroy();
     });
   }
