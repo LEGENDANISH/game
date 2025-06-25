@@ -2,66 +2,80 @@ export default class NetworkManager {
   constructor(scene) {
     this.scene = scene;
     this.socket = null;
-    this.roomCode = null;
-    this.isHost = false;
     this.isConnected = false;
+    this.playerId = null;
+    this.serverTimeOffset = 0;
+    this.lastPingTime = 0;
+    this.ping = 0;
 
-    // Local storage for player data
-    this.players = {};
+    // Client prediction state
+    this.inputQueue = [];
+    this.pendingInputs = [];
+    this.lastProcessedInput = 0;
+    this.clientTick = 0;
 
-    // Event emitter to communicate with the game scene
+    // Networked game state
+    this.gameState = {
+      players: new Map(),
+      bullets: new Map(),
+      lastUpdateTime: 0
+    };
+
     this.events = new Phaser.Events.EventEmitter();
   }
 
-  /**
-   * Connects to the WebSocket server
-   */
   connect() {
-    console.log('[NetworkManager] Connecting to WebSocket server...');
+    console.log('[Network] Connecting to WebSocket server...');
     this.socket = new WebSocket("ws://localhost:3000");
 
     this.socket.addEventListener('open', () => {
-      console.log('[NetworkManager] Connected to server');
+      console.log('[Network] Connected to server');
       this.isConnected = true;
+      this.startPingLoop();
       this.events.emit('connected');
     });
 
     this.socket.addEventListener('message', (event) => {
       try {
         const message = JSON.parse(event.data);
-        console.log('[NetworkManager] Received message:', message.type, message.data);
         this.handleMessage(message);
       } catch (error) {
-        console.error('[NetworkManager] Error parsing message:', error, event.data);
+        console.error('[Network] Error parsing message:', error);
       }
     });
 
     this.socket.addEventListener('close', () => {
-      console.log('[NetworkManager] Disconnected from server');
+      console.log('[Network] Disconnected from server');
       this.isConnected = false;
       this.events.emit('disconnected');
     });
 
     this.socket.addEventListener('error', (error) => {
-      console.error('[NetworkManager] WebSocket error:', error);
+      console.error('[Network] WebSocket error:', error);
       this.isConnected = false;
       this.events.emit('error', error);
     });
   }
 
-  /**
-   * Handles incoming messages from the server
-   */
+  startPingLoop() {
+    setInterval(() => {
+      if (this.isConnected) {
+        this.lastPingTime = Date.now();
+        this.sendMessage('PING', { clientTime: this.lastPingTime });
+      }
+    }, 1000);
+  }
+
   handleMessage(message) {
     const { type, data } = message;
 
     switch (type) {
-      case 'ROOM_JOINED':
-        this.handleRoomJoined(data);
+      case 'JOINED_ROOM':
+        this.handleJoinedRoom(data);
         break;
 
-      case 'JOINED_ROOM': // Handle both message types from server
-        this.handleRoomJoined(data);
+      case 'GAME_UPDATE':
+        this.handleGameUpdate(data);
         break;
 
       case 'PLAYER_JOINED':
@@ -72,38 +86,20 @@ export default class NetworkManager {
         this.handlePlayerLeft(data);
         break;
 
-      case 'PLAYER_MOVED':
-        this.handlePlayerMoved(data);
-        break;
-
       case 'PLAYER_SHOT':
         this.handlePlayerShot(data);
         break;
 
-      case 'GAME_UPDATE':
-        this.handleGameUpdate(data);
+      case 'HEALTH_UPDATE':
+        this.handleHealthUpdate(data);
         break;
 
-      case 'GAME_STARTED':
-        this.handleGameStarted(data);
-        break;
-case 'HEALTH_UPDATE':
-  this.handlePlayerHealth(data);
-  break;
-      case 'GAME_ENDED':
-        this.handleGameEnded(data);
+      case 'PONG':
+        this.handlePong(data);
         break;
 
-      case 'ROOM_CLOSED':
-        this.handleRoomClosed(data);
-        break;
-
-      case 'ROOM_FULL':
-        this.handleRoomFull(data);
-        break;
-
-      case 'GAME_STARTING':
-        this.handleGameStarting(data);
+      case 'SERVER_RECONCILE':
+        this.handleServerReconcile(data);
         break;
 
       case 'ERROR':
@@ -111,173 +107,230 @@ case 'HEALTH_UPDATE':
         break;
 
       default:
-        console.warn('[NetworkManager] Unknown message type:', type, data);
+        console.warn('[Network] Unknown message type:', type);
     }
   }
 
   // --- Message Handlers ---
 
-  handleRoomJoined(data) {
-    this.roomCode = data.roomCode;
-    this.isHost = data.isCreator || false;
-    const playerId = data.playerId;
-
-    this.players[playerId] = {
-      id: playerId,
-      name: data.playerName || `Player${playerId}`,
-      team: data.team,
-      position: data.spawnPosition
-    };
-
-    console.log(`[NetworkManager] Joined room ${this.roomCode} as ${playerId}`);
+  handleJoinedRoom(data) {
+    this.playerId = data.playerId;
+    this.serverTimeOffset = Date.now() - data.serverTime;
+    console.log(`[Network] Joined room as ${this.playerId}`);
     this.events.emit('joinedRoom', data);
   }
 
+  handleGameUpdate(data) {
+    // Update server time offset
+    this.serverTimeOffset = Date.now() - data.timestamp;
+
+    // Update players
+    data.players.forEach(playerState => {
+      if (!this.gameState.players.has(playerState.id)) {
+        this.gameState.players.set(playerState.id, playerState);
+      } else {
+        const player = this.gameState.players.get(playerState.id);
+        Object.assign(player, playerState);
+      }
+    });
+
+    // Update bullets
+    this.gameState.bullets.clear();
+    data.bullets.forEach(bullet => {
+      this.gameState.bullets.set(bullet.id, bullet);
+    });
+
+    this.events.emit('gameUpdate', data);
+  }
+
   handlePlayerJoined(data) {
-    this.players[data.playerId] = {
+    this.gameState.players.set(data.playerId, {
       id: data.playerId,
-      name: data.playerName,
-      team: data.team,
-      position: data.position || { x: 100, y: 300 }
-    };
-    console.log(`[NetworkManager] Player joined: ${data.playerId}`);
+      position: data.position,
+      velocity: { x: 0, y: 0 },
+      health: 100,
+      lastUpdate: this.getServerTime()
+    });
     this.events.emit('playerJoined', data);
   }
 
   handlePlayerLeft(data) {
-    delete this.players[data.playerId];
-    console.log(`[NetworkManager] Player left: ${data.playerId}`);
+    this.gameState.players.delete(data.playerId);
     this.events.emit('playerLeft', data.playerId);
-  }
-
-  handlePlayerMoved(data) {
-    if (this.players[data.playerId]) {
-      this.players[data.playerId].position = data.position;
-      this.players[data.playerId].rotation = data.rotation;
-    }
-    this.events.emit('playerMoved', data);
   }
 
   handlePlayerShot(data) {
     this.events.emit('playerShot', data);
   }
 
-  handleGameUpdate(data) {
-    if (data.state && data.state.players) {
-      Object.keys(data.state.players).forEach(playerId => {
-        if (!this.players[playerId]) return;
-
-        const remotePlayer = data.state.players[playerId];
-        this.players[playerId].position = remotePlayer.position;
-        this.players[playerId].health = remotePlayer.health;
-        this.players[playerId].kills = remotePlayer.kills;
-        this.players[playerId].deaths = remotePlayer.deaths;
-      });
+  handleHealthUpdate(data) {
+    const player = this.gameState.players.get(data.playerId);
+    if (player) {
+      player.health = data.health;
+      player.lastUpdate = this.getServerTime();
     }
-
-    this.events.emit('gameUpdate', data);
+    this.events.emit('healthUpdate', data);
   }
 
-  handleGameStarted(data) {
-    console.log('[NetworkManager] Game started');
-    this.events.emit('gameStarted', data);
+  handlePong(data) {
+    this.ping = Date.now() - this.lastPingTime;
+    this.serverTimeOffset = Date.now() - data.serverTime;
   }
 
-  handleGameEnded(data) {
-    console.log('[NetworkManager] Game ended', data);
-    this.events.emit('gameEnded', data);
-  }
-handlePlayerHealth(data) {
-  if (this.players[data.playerId]) {
-    this.players[data.playerId].health = data.health;
-  }
-  this.events.emit('healthUpdate', data);
-}
-  handleRoomClosed(data) {
-    console.log('[NetworkManager] Room closed', data);
-    this.events.emit('roomClosed', data);
-  }
+  handleServerReconcile(data) {
+    // Find the corresponding input in our queue
+    const inputIndex = this.inputQueue.findIndex(
+      input => input.tick === data.clientTick
+    );
 
-  handleRoomFull(data) {
-    console.error('[NetworkManager] Room is full', data);
-    this.events.emit('roomFull', data);
-  }
+    if (inputIndex !== -1) {
+      // Remove all inputs up to this one (they've been processed by server)
+      this.inputQueue.splice(0, inputIndex + 1);
 
-  handleGameStarting(data) {
-    console.log('[NetworkManager] Game is starting soon', data);
-    this.events.emit('gameStarting', data);
+      // If server position differs from our prediction, correct it
+      const player = this.gameState.players.get(this.playerId);
+      if (player) {
+        const diffX = Math.abs(data.position.x - player.x);
+        const diffY = Math.abs(data.position.y - player.y);
+
+        if (diffX > 10 || diffY > 10) {
+          // Significant difference - snap to server position
+          player.x = data.position.x;
+          player.y = data.position.y;
+          player.velocity.x = data.velocity.x;
+          player.velocity.y = data.velocity.y;
+
+          // Replay remaining inputs from corrected position
+          this.replayInputs();
+        }
+      }
+    }
   }
 
   handleError(data) {
-    console.error('[NetworkManager] Server error:', data);
+    console.error('[Network] Server error:', data.message);
     this.events.emit('error', data);
   }
 
-  // --- Sending Messages ---
+  // --- Client Prediction Methods ---
 
-  createRoom() {
-    console.log('[NetworkManager] Creating room');
-    this.sendMessage('createRoom');
+  collectInput() {
+    return {
+      left: this.scene.keys.left.isDown,
+      right: this.scene.keys.right.isDown,
+      up: this.scene.keys.up.isDown,
+      shoot: this.scene.keys.space.isDown,
+      tick: this.clientTick,
+      timestamp: this.getServerTime()
+    };
   }
 
-  joinRoom(roomCode) {
-    console.log(`[NetworkManager] Joining room: ${roomCode}`);
-    this.sendMessage('joinRoom', { roomCode });
-  }
+  sendInput(input) {
+    this.inputQueue.push(input);
+    this.pendingInputs.push(input);
 
-  // NEW: Send player actions (replaces sendPlayerUpdate)
-  sendPlayerAction(actionData) {
-    console.log('[NetworkManager] Sending player action:', actionData);
-    this.sendMessage('playerAction', actionData);
-  }
-
-  // DEPRECATED: Keep for backward compatibility but use sendPlayerAction instead
-  sendPlayerUpdate(playerData) {
-    console.log('[NetworkManager] Sending player update (deprecated):', playerData);
-    
-    // Convert old format to new action format
-    this.sendPlayerAction({
-      type: 'MOVE',
-      data: {
-        position: playerData.position,
-        velocity: playerData.velocity,
-        rotation: playerData.flipX ? Math.PI : 0,
-        flipX: playerData.flipX
-      }
+    this.sendMessage('PLAYER_INPUT', {
+      input: input,
+      clientTick: this.clientTick,
+      clientTime: input.timestamp
     });
+
+    this.clientTick++;
   }
 
-  sendPlayerShoot(shotData) {
-    console.log('[NetworkManager] Sending player shot:', shotData);
-    this.sendPlayerAction({
-      type: 'SHOOT',
-      data: shotData
+  replayInputs() {
+    const player = this.gameState.players.get(this.playerId);
+    if (!player) return;
+
+    const savedPosition = { x: player.x, y: player.y };
+    const savedVelocity = { x: player.velocity.x, y: player.velocity.y };
+
+    // Reapply all unprocessed inputs
+    this.inputQueue.forEach(input => {
+      this.applyInput(input, 16); // Assume 60fps delta
     });
+
+    // Restore physics state
+    player.x = savedPosition.x;
+    player.y = savedPosition.y;
+    player.velocity.x = savedVelocity.x;
+    player.velocity.y = savedVelocity.y;
   }
-sendPlayerHealth(health) {
-  console.log('[NetworkManager] Sending player health:', health);
-  this.sendPlayerAction({
-    type: 'HEALTH_UPDATE',
-    data: {
-      health: health
-    }
-  });
-}
-  sendMessage(type, data = {}) {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      const message = JSON.stringify({ type, data });
-      console.log('[NetworkManager] Sending message:', message);
-      this.socket.send(message);
+
+  applyInput(input, delta) {
+    const player = this.gameState.players.get(this.playerId);
+    if (!player) return;
+
+    const speed = 300;
+    const jumpForce = -600;
+
+    // Horizontal movement
+    if (input.left) {
+      player.velocity.x = -speed;
+    } else if (input.right) {
+      player.velocity.x = speed;
     } else {
-      console.warn('[NetworkManager] Cannot send message - WebSocket not open');
+      player.velocity.x = 0;
     }
+
+    // Jumping
+    if (input.up && player.body && player.body.onFloor()) {
+      player.velocity.y = jumpForce;
+    }
+
+    // Update position
+    player.x += player.velocity.x * (delta / 1000);
+    player.y += player.velocity.y * (delta / 1000);
+  }
+
+  // --- Network Methods ---
+
+  sendPlayerAction(type, data) {
+    if (!this.isConnected) return;
+
+    const message = {
+      type,
+      data: {
+        ...data,
+        clientTick: this.clientTick,
+        timestamp: this.getServerTime()
+      }
+    };
+
+    this.sendMessage(type, message.data);
+  }
+
+  sendShoot(position, direction) {
+    this.sendPlayerAction('PLAYER_SHOOT', {
+      position,
+      direction,
+      clientTick: this.clientTick
+    });
+  }
+
+  sendHealthUpdate(health) {
+    this.sendPlayerAction('HEALTH_UPDATE', {
+      health,
+      clientTick: this.clientTick
+    });
+  }
+
+  sendMessage(type, data) {
+    if (this.isConnected && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({ type, data }));
+    }
+  }
+
+  // --- Utility Methods ---
+
+  getServerTime() {
+    return Date.now() - this.serverTimeOffset;
   }
 
   disconnect() {
     if (this.socket) {
-      console.log('[NetworkManager] Disconnecting from server');
-      this.isConnected = false;
       this.socket.close();
+      this.isConnected = false;
     }
   }
 

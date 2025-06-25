@@ -8,13 +8,16 @@ export default class Player {
     this.scene = scene;
     this.type = type; // 'local' or 'remote'
 
-    // Player state
+    // State tracking
     this.isDead = false;
     this.health = GAME_CONFIG.PLAYER.MAX_HEALTH;
     this.maxHealth = GAME_CONFIG.PLAYER.MAX_HEALTH;
     this.isInvulnerable = false;
+
+    // Input handling
     this.lastShotTime = 0;
     this.shootCooldown = GAME_CONFIG.PLAYER.SHOOT_COOLDOWN || 200;
+    this.inputHistory = []; // For reconciliation
 
     // Sprite setup
     this.sprite = scene.physics.add.sprite(x, y, null);
@@ -28,8 +31,8 @@ export default class Player {
     this.stickman = createStickman(scene, x, y, type === 'local' ? COLORS.PLAYER : 0xff0000);
 
     // Health bars
-this.healthBarBg = scene.add.rectangle(x, y - 35, 30, 4, 0x000000, 0.5).setDepth(1).setOrigin(0, 0.5);
-this.healthBar = scene.add.rectangle(x, y - 35, 28, 2, COLORS.HEALTH_GOOD).setDepth(1).setOrigin(0, 0.5);
+    this.healthBarBg = scene.add.rectangle(x, y - 35, 30, 4, 0x000000, 0.5).setDepth(1).setOrigin(0, 0.5);
+    this.healthBar = scene.add.rectangle(x, y - 35, 28, 2, COLORS.HEALTH_GOOD).setDepth(1).setOrigin(0, 0.5);
 
     // Bullets group (only for local player)
     if (type === 'local') {
@@ -61,90 +64,99 @@ this.healthBar = scene.add.rectangle(x, y - 35, 28, 2, COLORS.HEALTH_GOOD).setDe
 
   update(keys) {
     if (this.isDead) return;
-    if (this.type !== 'local') return;
 
+    if (this.type === 'local') {
+      const speed = GAME_CONFIG.PLAYER.SPEED;
+      let moving = false;
+      let input = {
+        moveLeft: keys.A.isDown,
+        moveRight: keys.D.isDown,
+        jump: keys.W.isDown && this.sprite.body.touching.down,
+        shoot: keys.SPACE.isDown,
+        timestamp: Date.now()
+      };
+
+      // Save input for later reconciliation
+      this.inputHistory.push(input);
+
+      // Apply input locally
+      this.applyInput(input);
+
+      // Send inputs to server
+      this.scene.network.sendPlayerAction({
+        type: 'INPUT',
+        data: {
+          input: input,
+          sequence: this.inputHistory.length - 1
+        }
+      });
+
+      // Update visuals
+      this.updateVisuals(moving);
+
+      // Handle bullets
+      this.updateBullets();
+
+      // Check death
+      if (this.health <= 0 && !this.isDead) {
+        this.die();
+      }
+    } else {
+      // Remote players use interpolated position
+      this.updateVisuals(false);
+    }
+  }
+
+  applyInput(input) {
     const speed = GAME_CONFIG.PLAYER.SPEED;
-    let moving = false;
 
-    // Movement
-    if (keys.A.isDown) {
+    if (input.moveLeft) {
       this.sprite.setVelocityX(-speed);
       this.direction = -1;
-      moving = true;
       this.animationState = 'walking';
-    } else if (keys.D.isDown) {
+    } else if (input.moveRight) {
       this.sprite.setVelocityX(speed);
       this.direction = 1;
-      moving = true;
       this.animationState = 'walking';
     } else {
       this.sprite.setVelocityX(0);
       this.animationState = 'idle';
     }
 
-    // Jumping
-    if (keys.W.isDown && this.sprite.body.touching.down) {
+    if (input.jump && this.sprite.body.touching.down) {
       this.sprite.setVelocityY(GAME_CONFIG.PLAYER.JUMP_VELOCITY);
       this.animationState = 'jumping';
     }
 
-    // Shooting
-    if (keys.SPACE.isDown) {
+    if (input.shoot) {
       this.shoot();
     }
-
-    this.updateVisuals(moving);
-
-    // Update bullets only for local player
-    if (this.type === 'local' && this.bullets) {
-      this.updateBullets();
-    }
-
-    // Check death
-    if (this.health <= 0 && !this.isDead) {
-      this.die();
-    }
-      this.updateVisuals(moving);
-
   }
 
-  // Separate method to update remote players
-  updatePosition(x, y, flipX = false) {
-    this.sprite.setPosition(x, y);
-    this.direction = flipX ? -1 : 1;
-    this.updateVisuals(false);
-  }
+  reconcile(serverState) {
+    if (!serverState.inputs || !serverState.position) return;
 
-  // Update visual position and animation
-  updateVisuals(moving) {
-    if (this.isDead) {
-      this.stickman.group.setVisible(false);
-      return;
+    // If server position is different from predicted, rewind and reapply inputs
+    const mismatchX = Math.abs(this.sprite.x - serverState.position.x) > 2;
+    const mismatchY = Math.abs(this.sprite.y - serverState.position.y) > 2;
+
+    if (mismatchX || mismatchY) {
+      // Reset to server position
+      this.sprite.setPosition(serverState.position.x, serverState.position.y);
+
+      // Replay unconfirmed inputs
+      serverState.inputs.forEach((input, index) => {
+        if (this.inputHistory[index]) {
+          this.applyInput(this.inputHistory[index]);
+        }
+      });
     }
 
-    // Sync visual position with physics body
-    this.stickman.group.setPosition(this.sprite.x, this.sprite.y);
-this.healthBarBg.setPosition(this.sprite.x - 15, this.sprite.y - 35);
-this.healthBar.setPosition(this.sprite.x - 15, this.sprite.y - 35);
-
-    // Walking animation
-    if (this.animationState === 'walking' && moving) {
-      this.walkTimer += 0.2;
-      const wobble = Math.sin(this.walkTimer) * 2;
-      this.stickman.leftArm.setPosition(-8 + wobble, -5).setRotation(-0.3 + wobble * 0.1);
-      this.stickman.rightArm.setPosition(8 - wobble, -5).setRotation(0.3 - wobble * 0.1);
-      this.stickman.leftLeg.setPosition(-6 + wobble, 15).setRotation(-0.2 + wobble * 0.2);
-      this.stickman.rightLeg.setPosition(6 - wobble, 15).setRotation(0.2 - wobble * 0.2);
-    } else {
-      this.walkTimer = 0;
-      this.stickman.leftArm.setPosition(-8, -5).setRotation(-0.3);
-      this.stickman.rightArm.setPosition(8, -5).setRotation(0.3);
-      this.stickman.leftLeg.setPosition(-6, 15).setRotation(-0.2);
-      this.stickman.rightLeg.setPosition(6, 15).setRotation(0.2);
+    // Update health
+    if (serverState.health !== undefined) {
+      this.health = serverState.health;
+      this.updateHealthBar();
     }
-
-    // Flip direction
-    this.stickman.group.setScale(this.direction === -1 ? -1 : 1, 1);
   }
 
   shoot() {
@@ -163,6 +175,7 @@ this.healthBar.setPosition(this.sprite.x - 15, this.sprite.y - 35);
       this.direction,
       this.currentGun.damage
     );
+
     bullet.owner = 'player';
     bullet.sprite.bulletInstance = bullet;
     this.bullets.add(bullet.sprite);
@@ -198,18 +211,37 @@ this.healthBar.setPosition(this.sprite.x - 15, this.sprite.y - 35);
     }
   }
 
-  // Handle bullet updates
-  updateBullets() {
-    if (this.isDead || !this.bullets) return;
+  updateVisuals(moving) {
+    if (this.isDead) {
+      this.stickman.group.setVisible(false);
+      return;
+    }
 
-    this.bullets.children.each((bulletSprite) => {
-      if (bulletSprite.bulletInstance?.update) {
-        bulletSprite.bulletInstance.update();
-      }
-    });
+    // Sync visual position with physics body
+    this.stickman.group.setPosition(this.sprite.x, this.sprite.y);
+    this.healthBarBg.setPosition(this.sprite.x - 15, this.sprite.y - 35);
+    this.healthBar.setPosition(this.sprite.x - 15, this.sprite.y - 35);
+
+    // Walking animation
+    if (this.animationState === 'walking' && moving) {
+      this.walkTimer += 0.2;
+      const wobble = Math.sin(this.walkTimer) * 2;
+      this.stickman.leftArm.setPosition(-8 + wobble, -5).setRotation(-0.3 + wobble * 0.1);
+      this.stickman.rightArm.setPosition(8 - wobble, -5).setRotation(0.3 - wobble * 0.1);
+      this.stickman.leftLeg.setPosition(-6 + wobble, 15).setRotation(-0.2 + wobble * 0.2);
+      this.stickman.rightLeg.setPosition(6 - wobble, 15).setRotation(0.2 - wobble * 0.2);
+    } else {
+      this.walkTimer = 0;
+      this.stickman.leftArm.setPosition(-8, -5).setRotation(-0.3);
+      this.stickman.rightArm.setPosition(8, -5).setRotation(0.3);
+      this.stickman.leftLeg.setPosition(-6, 15).setRotation(-0.2);
+      this.stickman.rightLeg.setPosition(6, 15).setRotation(0.2);
+    }
+
+    // Flip direction
+    this.stickman.group.setScale(this.direction === -1 ? -1 : 1, 1);
   }
 
-  // Handle taking damage
   takeDamage(amount, attackerId = null) {
     if (this.isDead || this.isInvulnerable) return;
 
@@ -229,7 +261,6 @@ this.healthBar.setPosition(this.sprite.x - 15, this.sprite.y - 35);
     }
   }
 
-  // Handle death
   die() {
     this.isDead = true;
     this.health = 0;
@@ -254,7 +285,6 @@ this.healthBar.setPosition(this.sprite.x - 15, this.sprite.y - 35);
     });
   }
 
-  // Handle respawn
   respawn() {
     this.isDead = false;
     this.health = this.maxHealth;
@@ -272,22 +302,19 @@ this.healthBar.setPosition(this.sprite.x - 15, this.sprite.y - 35);
     console.log('Player Respawned');
   }
 
-  // Update health bar visually
   updateHealthBar() {
     const ratio = this.health / this.maxHealth;
-    const barWidth = 28;
 
-this.scene.tweens.add({
-  targets: this.healthBar,
-  scaleX: ratio,
-  duration: 150,
-  ease: 'Linear',
-});
+    this.scene.tweens.add({
+      targets: this.healthBar,
+      scaleX: ratio,
+      duration: 150,
+      ease: 'Linear'
+    });
 
     this.healthBar.setFillStyle(getHealthColor(this.health, this.maxHealth));
   }
 
-  // Apply tint to stickman parts
   applyTintToStickman(color) {
     this.stickman.head.setFillStyle(color);
     this.stickman.body.setFillStyle(color);
@@ -297,13 +324,11 @@ this.scene.tweens.add({
     this.stickman.rightLeg.setFillStyle(color);
   }
 
-  // Reset stickman color
   resetVisuals() {
     const color = this.type === 'local' ? COLORS.PLAYER : 0xff0000;
     this.applyTintToStickman(color);
   }
 
-  // Set invulnerable state with flashing effect
   setInvulnerable(duration = 500) {
     this.isInvulnerable = true;
 
@@ -329,7 +354,6 @@ this.scene.tweens.add({
     });
   }
 
-  // Show "Respawning..." UI with countdown
   showRespawnUI() {
     const scene = this.scene;
     const width = scene.game.config.width;
@@ -337,16 +361,12 @@ this.scene.tweens.add({
 
     if (this.respawnUI) this.hideRespawnUI();
 
-    // Overlay
     this.respawnOverlay = scene.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.7).setDepth(1000);
-
-    // Text
     this.respawnText = scene.add.text(width / 2, height / 2 - 30, 'Respawning...', {
       fontSize: '32px',
       fill: '#ffffff',
     }).setOrigin(0.5).setDepth(1001);
 
-    // Countdown
     this.countdownText = scene.add.text(width / 2, height / 2 + 10, '5', {
       fontSize: '48px',
       fill: '#ffdd57',
@@ -371,7 +391,6 @@ this.scene.tweens.add({
     });
   }
 
-  // Hide respawn UI
   hideRespawnUI() {
     if (this.respawnUI) {
       this.respawnUI.overlay.destroy();
@@ -386,7 +405,6 @@ this.scene.tweens.add({
     }
   }
 
-  // Clean up on destroy
   destroy() {
     if (this.respawnTimer) this.respawnTimer.destroy();
     this.hideRespawnUI();

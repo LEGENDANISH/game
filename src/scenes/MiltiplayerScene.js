@@ -4,6 +4,7 @@ import NetworkManager from './network.js';
 import Player from '../entities/Player.js';
 import { GAME_CONFIG } from '../utils/constants.js';
 import Platform from '../entities/Platform.js';
+import Bullet from '../entities/Bullet.js';
 
 // Modular setup helpers
 import setupWorld from './helpers/setupWorld.js';
@@ -18,9 +19,13 @@ export default class MultiplayerScene extends Phaser.Scene {
     this.localPlayer = null;
     this.localPlayerId = null;
     this.otherPlayersGroup = null;
+      this.bullets = null; // ADD THIS LINE
+
     this.network = null;
     this.uiScene = null;
-    this.lastUpdateTime = 0;
+    this.lastUpdateTime = 0;  
+      this.lastShotTime = 0; // ADD THIS LINE
+
   }
 
   preload() {
@@ -59,6 +64,8 @@ export default class MultiplayerScene extends Phaser.Scene {
   createLocalPlayer() {
     this.localPlayer = new Player(this, 100, 600, 'local');
     this.otherPlayersGroup = this.physics.add.group();
+      this.bullets = this.physics.add.group(); // ADD THIS LINE
+
     this.localPlayer.sprite.setCollideWorldBounds(true);
   }
 
@@ -69,6 +76,15 @@ export default class MultiplayerScene extends Phaser.Scene {
     this.physics.add.collider(this.otherPlayersGroup, this.ground);
     this.physics.add.collider(this.otherPlayersGroup, this.platforms);
     this.physics.add.collider(this.localPlayer.sprite, this.otherPlayersGroup, null, null, this);
+
+    this.physics.add.collider(this.bullets, this.ground, (bullet) => bullet.destroy());
+  this.physics.add.collider(this.bullets, this.platforms, (bullet) => bullet.destroy());
+  this.physics.add.overlap(this.bullets, this.otherPlayersGroup, (bullet, enemy) => {
+    if (enemy.playerInstance) {
+      enemy.playerInstance.takeDamage(10);
+    }
+    bullet.destroy();
+  });
   }
 
   
@@ -77,9 +93,16 @@ export default class MultiplayerScene extends Phaser.Scene {
 
     this.localPlayer.update(this.wasd);
 
+
+if (this.wasd && this.wasd.space && this.wasd.space.isDown && this.time.now > this.lastShotTime + 250) {
+    this.handleShooting();
+    this.lastShotTime = this.time.now;
+  }
+
+
     // Send updates at a controlled rate (20 updates per second)
     const now = Date.now();
-    if (now - this.lastUpdateTime > 50 && this.network?.isConnected) {
+if (now - this.lastUpdateTime > 33 && this.network?.isConnected) { // 30 FPS instead of 20 FPS
       this.lastUpdateTime = now;
       this.sendPlayerUpdate();
     }
@@ -151,29 +174,27 @@ sendHealthUpdate() {
   }
 }
 
-  handleShooting(pointer) {
-    const sprite = this.localPlayer.sprite;
-    const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-    
-    // Calculate rotation from player to mouse cursor
-    const rotation = Phaser.Math.Angle.Between(
-      sprite.x, sprite.y,
-      worldPoint.x, worldPoint.y
-    );
+ handleShooting() {
+  const sprite = this.localPlayer.sprite;
+  const rotation = sprite.flipX ? Math.PI : 0; // Shoot left or right based on flip
+  
+  // Create bullet using Bullet.js
+  const bullet = new Bullet(this, sprite.x, sprite.y, rotation);
+  this.bullets.add(bullet.sprite);
 
-    // Send shooting action to backend
-    this.network.sendPlayerAction({
-      type: 'SHOOT',
-      data: {
-        position: {
-          x: Math.round(sprite.x),
-          y: Math.round(sprite.y)
-        },
-        rotation: rotation
-      }
-    });
-    this.sendHealthUpdate();
-  }
+  // Send shooting action to backend
+  this.network.sendPlayerAction({
+    type: 'SHOOT',
+    data: {
+      position: {
+        x: Math.round(sprite.x),
+        y: Math.round(sprite.y)
+      },
+      rotation: rotation
+    }
+  });
+  this.sendHealthUpdate();
+}
 
   setupNetworkEvents() {
     const safeEmit = (event, handler) => {
@@ -273,22 +294,19 @@ safeEmit('damageTaken', (data) => {
 
   const remotePlayer = this.remotePlayers.get(playerId);
   if (remotePlayer?.sprite?.playerInstance) {
-    remotePlayer.sprite.playerInstance.updateHealth(health);
+    remotePlayer.sprite.playerInstance.health = health;
+    remotePlayer.sprite.playerInstance.updateHealthBar();
   }
 });
 safeEmit('healthUpdate', (data) => {
   if (data.playerId === this.localPlayerId) {
     this.localPlayer.health = data.health;
+    this.localPlayer.updateHealthBar();
   } else {
     const remotePlayer = this.remotePlayers.get(data.playerId);
     if (remotePlayer?.sprite?.playerInstance) {
       remotePlayer.sprite.playerInstance.health = data.health;
-      // Update visual health bar
-      const healthPercent = data.health / remotePlayer.sprite.playerInstance.maxHealth;
-      if (remotePlayer.healthBarFill) {
-        remotePlayer.healthBarFill.scaleX = healthPercent;
-        remotePlayer.healthBarFill.setFillStyle(healthPercent > 0.5 ? 0x00ff00 : healthPercent > 0.25 ? 0xffff00 : 0xff0000);
-      }
+      remotePlayer.sprite.playerInstance.updateHealthBar();
     }
   }
   this.updateUI();
@@ -319,6 +337,8 @@ safeEmit('healthUpdate', (data) => {
   }
     console.log(`Adding remote player ${id} at ${x},${y}`);
     const remotePlayer = new Player(this, x, y, 'remote');
+    remotePlayer.sprite.playerInstance = remotePlayer; // Ensure reference is set
+
      if (remotePlayer.sprite.body) {
     remotePlayer.sprite.body.setCollideWorldBounds(true);
     remotePlayer.sprite.body.setGravityY(800); // Add gravity like local player
@@ -334,16 +354,14 @@ safeEmit('healthUpdate', (data) => {
       fill: '#ffffff',
       backgroundColor: '#000000'
     })
-    const healthBarBg = this.add.rectangle(x, y - 55, 50, 6, 0x000000);
-const healthBarFill = this.add.rectangle(x, y - 55, 50, 6, 0x00ff00);
+    
 ;
 
     this.otherPlayersGroup.add(remotePlayer.sprite);
     this.remotePlayers.set(id, {
       sprite: remotePlayer.sprite,
       text: nameText,
-      healthBarBg: healthBarBg,
-  healthBarFill: healthBarFill,
+     
       lastUpdate: Date.now(),
       targetX: x,
       targetY: y,
@@ -369,8 +387,9 @@ const healthBarFill = this.add.rectangle(x, y - 55, 50, 6, 0x00ff00);
 player.velocityY = velocity.y;
 player.lastUpdate = Date.now();
 
-    // Update visual properties immediately
-    player.sprite.setFlipX(flipX);
+  // Update visual properties immediately
+  player.sprite.setFlipX(flipX);
+  
     if (player.text) {
       player.text.setPosition(x, y - 40);
     }
@@ -380,14 +399,32 @@ if (player.sprite.playerInstance) {
 }
      console.log(`Updated player ${id} position`, x, y);
   }
+  predictRemotePlayerPosition(player) {
+  if (!player.velocityX && !player.velocityY) return;
+  
+  const timeSinceUpdate = Date.now() - player.lastUpdate;
+  const deltaTime = timeSinceUpdate / 1000; // Convert to seconds
+  
+  // Predict where player should be based on last known velocity
+  const predictedX = player.targetX + (player.velocityX * deltaTime);
+  const predictedY = player.targetY + (player.velocityY * deltaTime);
+  
+  // Use predicted position as target for smoother interpolation
+  player.targetX = predictedX;
+  player.targetY = predictedY;
+}
 
   updateRemotePlayersInterpolation() {
+  
     this.remotePlayers.forEach((player, id) => {
+          this.predictRemotePlayerPosition(player);
+
       const timeSinceUpdate = Date.now() - player.lastUpdate;
       
       // Only interpolate if update is recent (within 200ms)
-      if (timeSinceUpdate < 200) {
-        const lerpFactor = 0.2; // Smooth interpolation
+if (timeSinceUpdate < 500) {
+      const lerpFactor = 0.15; // Smoother interpolation (was 0.2)
+      
         
         const currentX = player.sprite.x;
         const currentY = player.sprite.y;
@@ -396,16 +433,9 @@ if (player.sprite.playerInstance) {
         const newY = Phaser.Math.Linear(currentY, player.targetY, lerpFactor);
         
         player.sprite.setPosition(newX, newY);
+      
+       
         
-        if (player.text) {
-          player.text.setPosition(newX, newY );
-        }
-        if (player.healthBarBg) {
-  player.healthBarBg.setPosition(newX, newY - 55);
-}
-if (player.healthBarFill) {
-  player.healthBarFill.setPosition(newX, newY - 55);
-}
       } 
     });
   }
@@ -442,12 +472,18 @@ if (player.healthBarFill) {
     );
     bullet.setCollideWorldBounds(true);
 
+     this.physics.add.overlap(bullet.sprite, this.localPlayer.sprite, () => {
+    this.localPlayer.takeDamage(10);
+    this.sendHealthUpdate();
+    bullet.destroy();
+  });
     // Auto-destroy after 2 seconds
     this.time.delayedCall(2000, () => {
       if (bullet.active) bullet.destroy();
     });
 
     // Collision handlers
+    
     this.physics.add.collider(bullet, this.platforms, () => bullet.destroy());
     this.physics.add.collider(bullet, this.ground, () => bullet.destroy());
     this.physics.add.overlap(bullet, this.localPlayer.sprite, () => {

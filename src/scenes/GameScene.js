@@ -40,6 +40,8 @@ createBackground(this);
 
   setupWorld() {
     this.physics.world.setBounds(0, 0, GAME_CONFIG.WORLD.WIDTH, GAME_CONFIG.WORLD.HEIGHT);
+      this.physics.world.gravity.y = 800; // Add this line to set world gravity
+
     this.ground = this.physics.add.staticGroup();
 
     const groundSprite = this.add.rectangle(
